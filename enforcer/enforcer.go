@@ -64,8 +64,6 @@ func NewEnforcer(enforcerConfig Config) (*casbin.Enforcer, error) {
 		}
 	}
 
-	enforcer.EnableAutoSave(true)
-
 	enforcer.AddFunction("isAssignedRoleInParentDomain", functions.CreateIsAssignedRoleInParentDomain(enforcer))
 
 	return enforcer, nil

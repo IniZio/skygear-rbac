@@ -8,10 +8,16 @@ import (
 	casbin "github.com/casbin/casbin/v2"
 
 	"skygear-rbac/constants"
+	"skygear-rbac/enforcer"
 )
 
+func replace(enforcer **casbin.Enforcer, newEnforcer *casbin.Enforcer) {
+	*enforcer = newEnforcer
+}
+
 type ReloadHandler struct {
-	Enforcer *casbin.Enforcer
+	Enforcer       *casbin.Enforcer
+	EnforcerConfig enforcer.Config
 }
 
 type ReloadInput struct {
@@ -22,20 +28,18 @@ type ReloadInput struct {
 
 func (h *ReloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodGet:
-		err := h.Enforcer.LoadPolicy()
-		if err != nil {
-			log.Fatal(err)
-			w.WriteHeader(502)
-		}
-		log.Println("♻ RBAC reloaded enforcer")
 	case http.MethodPost:
 		var err error
 
 		input := ReloadInput{}
 		json.NewDecoder(r.Body).Decode(&input)
 
-		h.Enforcer.LoadPolicy()
+		newEnforcer, err := enforcer.NewEnforcer(h.EnforcerConfig)
+		if err != nil {
+			log.Fatal(err)
+			w.WriteHeader(500)
+			return
+		}
 
 		// Saves domain inheritance
 		for _, domainInput := range input.Domains {
@@ -43,19 +47,21 @@ func (h *ReloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				domainInput.Parent = "root"
 			}
 
-			_, err = h.Enforcer.AddNamedGroupingPolicy("g", domainInput.Parent, domainInput.Domain, constants.IsDomain)
+			_, err = newEnforcer.AddNamedGroupingPolicy("g", domainInput.Parent, domainInput.Domain, constants.IsDomain)
 
 			if err != nil {
 				log.Fatal(err)
-				w.WriteHeader(502)
+				w.WriteHeader(500)
+				return
 			}
 
 			if len(domainInput.SubDomains) != 0 {
 				for _, subdomain := range domainInput.SubDomains {
-					_, err = h.Enforcer.AddNamedGroupingPolicy("g", domainInput.Domain, subdomain, constants.IsDomain)
+					_, err = newEnforcer.AddNamedGroupingPolicy("g", domainInput.Domain, subdomain, constants.IsDomain)
 					if err != nil {
 						log.Fatal(err)
-						w.WriteHeader(502)
+						w.WriteHeader(500)
+						return
 					}
 				}
 			}
@@ -68,16 +74,18 @@ func (h *ReloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if roleAssignmentInput.Unassign {
-				_, err = h.Enforcer.RemoveNamedGroupingPolicy("g", roleAssignmentInput.Subject, roleAssignmentInput.Role, roleAssignmentInput.Domain)
+				_, err = newEnforcer.RemoveNamedGroupingPolicy("g", roleAssignmentInput.Subject, roleAssignmentInput.Role, roleAssignmentInput.Domain)
 				if err != nil {
 					log.Fatal(err)
-					w.WriteHeader(502)
+					w.WriteHeader(500)
+					return
 				}
 			} else {
-				_, err = h.Enforcer.AddNamedGroupingPolicy("g", roleAssignmentInput.Subject, roleAssignmentInput.Role, roleAssignmentInput.Domain)
+				_, err = newEnforcer.AddNamedGroupingPolicy("g", roleAssignmentInput.Subject, roleAssignmentInput.Role, roleAssignmentInput.Domain)
 				if err != nil {
 					log.Fatal(err)
-					w.WriteHeader(502)
+					w.WriteHeader(500)
+					return
 				}
 			}
 		}
@@ -85,20 +93,24 @@ func (h *ReloadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Saves access rights
 		for _, policyInput := range input.Policies {
 			if policyInput.Effect == "deny" {
-				_, err = h.Enforcer.AddPolicy(policyInput.Domain, policyInput.Subject, policyInput.Object, policyInput.Action, "deny")
+				_, err = newEnforcer.AddPolicy(policyInput.Domain, policyInput.Subject, policyInput.Object, policyInput.Action, "deny")
 				if err != nil {
 					log.Fatal(err)
-					w.WriteHeader(502)
+					w.WriteHeader(500)
+					return
 				}
 			} else {
-				_, err := h.Enforcer.AddPolicy(policyInput.Domain, policyInput.Subject, policyInput.Object, policyInput.Action, "allow")
+				_, err := newEnforcer.AddPolicy(policyInput.Domain, policyInput.Subject, policyInput.Object, policyInput.Action, "allow")
 				if err != nil {
 					log.Fatal(err)
-					w.WriteHeader(502)
+					w.WriteHeader(500)
+					return
 				}
 			}
 		}
 
-		h.Enforcer.SavePolicy()
+		replace(&h.Enforcer, newEnforcer)
+
+		newEnforcer.SavePolicy()
 	}
 }
